@@ -9,15 +9,26 @@ Python to publish multiple focused distributions instead of a single monolithic 
 
 ## Installing
 
-The recommended install for most users is the meta-package, which pulls in the core runtime and lets you add framework integrations as extras:
+The base meta-package installs the compliance CLI. Add an extra when you need
+the governance runtime, framework integrations, or the full Python stack:
 
 ```
+# Compliance CLI only
 pip install agent-governance-toolkit
+
+# Framework integrations
 pip install agent-governance-toolkit[langchain]
 pip install agent-governance-toolkit[crewai]
 pip install agent-governance-toolkit[openai-agents]
+
+# Full Python governance stack, including agentmesh and legacy agent_os compatibility
 pip install agent-governance-toolkit[full]
 ```
+
+`agent_os` is the legacy compatibility import from the old `agent-os-kernel`
+surface. It currently emits a `DeprecationWarning`; use
+`agent-governance-toolkit-core` (or the `[full]` extra) as the replacement
+distribution, and prefer `agt-policies`/ACS APIs for new policy-engine host code.
 
 If you only need a specific component, each package can also be installed on its own. See the package listing below for names.
 
@@ -39,6 +50,6 @@ It is not for applications or dashboards, demos or examples, monorepo-only produ
 
 `agent-compliance/`, `agent-discovery/`, `agent-hypervisor/`, `agent-lightning/`, `agent-marketplace/`, `agent-mcp-governance/`, `agent-mesh/`, `agent-os/`, `agent-primitives/`, `agent-rag-governance/`, `agent-runtime/`, `agent-sandbox/`, `agent-sre/`, `agentmesh-integrations/`
 
-## Package Consolidation (v4.0.0 — Complete)
+## Package Consolidation (v4.1.0 — Complete)
 
-As of v4.0.0, 45 packages have been consolidated into 5 top-level distributions: `agent-governance-toolkit-core`, `agent-governance-toolkit-runtime`, `agent-governance-toolkit-sre`, `agent-governance-toolkit-cli`, and the `agent-governance-toolkit[full]` meta-package. See [issue #2482](https://github.com/microsoft/agent-governance-toolkit/issues/2482) for details. The consolidation plan, audit data, and migration guide are in `docs/package-consolidation/`. Previous package names remain installable as stub packages that redirect to the consolidated distributions.
+As of v4.1.0, 45 packages have been consolidated into 5 top-level distributions: `agent-governance-toolkit-core`, `agent-governance-toolkit-runtime`, `agent-governance-toolkit-sre`, `agent-governance-toolkit-cli`, and the `agent-governance-toolkit[full]` meta-package. See [issue #2482](https://github.com/microsoft/agent-governance-toolkit/issues/2482) for details. The consolidation plan, audit data, and migration guide are in `docs/package-consolidation/`. Previous package names remain installable as stub packages that redirect to the consolidated distributions.

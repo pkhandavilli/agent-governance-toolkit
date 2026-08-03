@@ -4,7 +4,15 @@ import asyncio
 import unittest
 from pathlib import Path
 
-from agent_control_specification import AgentControl, Decision, InterventionPoint, PerfTelemetry
+from agent_control_specification import (
+    AgentControl,
+    Decision,
+    InterventionPoint,
+    PerfTelemetry,
+    parse_manifest,
+    validate_manifest,
+    validate_manifest_overlay,
+)
 
 try:
     from agent_control_specification import _native  # noqa: F401
@@ -67,6 +75,41 @@ class MockPolicy:
 
 @unittest.skipUnless(_NATIVE_AVAILABLE, "agent_control_specification._native extension is not built")
 class NativeRuntimeTests(unittest.TestCase):
+    def test_parse_manifest_uses_native_yaml_semantics(self):
+        parsed = parse_manifest(
+            """agent_control_specification_version: 0.3.1-beta
+metadata:
+  on: 0b1010
+  date: 2026-07-16
+"""
+        )
+
+        self.assertEqual(parsed["metadata"]["on"], 10)
+        self.assertEqual(parsed["metadata"]["date"], "2026-07-16")
+
+    def test_validate_manifest_rejects_duplicate_keys(self):
+        with self.assertRaisesRegex(RuntimeError, "duplicate manifest mapping key"):
+            validate_manifest(
+                """agent_control_specification_version: 0.3.0-alpha
+agent_control_specification_version: 0.3.1-beta
+"""
+            )
+
+    def test_validate_manifest_overlay_checks_version_without_requiring_points(self):
+        validate_manifest_overlay(
+            """agent_control_specification_version: 0.3.1-beta
+extends:
+  - base.yaml
+"""
+        )
+        with self.assertRaisesRegex(RuntimeError, "unsupported agent_control_specification_version"):
+            validate_manifest_overlay(
+                """agent_control_specification_version: banana
+extends:
+  - base.yaml
+"""
+            )
+
     def test_basic_host_scenario_through_native_runtime(self):
         async def run():
             control = AgentControl.from_native(MANIFEST_YAML, MockAnnotator(), MockPolicy())
@@ -291,6 +334,44 @@ class ZeroConfigDefaultsTests(unittest.TestCase):
         self.assertTrue(_SUPPORT_MANIFEST.exists())
         control = AgentControl.from_path(str(_SUPPORT_MANIFEST))
         self.assertIsNotNone(control._runtime_client._native)
+
+    def test_from_url_rejects_non_https_and_fails_closed(self):
+        # The top level manifest URL loader reuses the extends trust gate, so a
+        # non HTTPS URL is refused before any network access, with or without a
+        # pin.
+        with self.assertRaises(RuntimeError) as ctx:
+            AgentControl.from_url("http://policy.example/manifest.yaml")
+        self.assertIn("runtime_error:manifest_invalid", str(ctx.exception))
+
+    def test_from_url_pin_is_optional(self):
+        # The pin is optional, mirroring URL extends. Omitting it still reaches
+        # the loader; here a non HTTPS URL surfaces the loader error, confirming
+        # the unpinned call path is wired.
+        with self.assertRaises(RuntimeError) as ctx:
+            AgentControl.from_url("http://policy.example/manifest.yaml", sha256=None)
+        self.assertIn("unsupported URL scheme", str(ctx.exception))
+
+    def test_from_url_malformed_pin_fails_closed_before_fetch(self):
+        # A supplied pin is validated for format before any network access, which
+        # confirms the sha256 argument threads through the Python wrapper, the
+        # native binding, and the core loader. "zz" is not 64 hex characters.
+        with self.assertRaises(RuntimeError) as ctx:
+            AgentControl.from_url("https://policy.example/manifest.yaml", sha256="zz")
+        self.assertIn("runtime_error:manifest_invalid", str(ctx.exception))
+
+    def test_from_url_threads_url_fetch_limits(self):
+        # The optional URL fetch limit overrides thread through the wrapper, the
+        # client, and the native binding. A non HTTPS URL still fails closed
+        # before any network access, confirming the extra arguments are wired
+        # without changing the trust gate.
+        with self.assertRaises(RuntimeError) as ctx:
+            AgentControl.from_url(
+                "http://policy.example/manifest.yaml",
+                max_url_bytes=4096,
+                url_timeout_ms=1000,
+                max_url_redirects=0,
+            )
+        self.assertIn("unsupported URL scheme", str(ctx.exception))
 
     def test_from_path_bad_explicit_opa_path_fails_closed_on_evaluation(self):
         import os

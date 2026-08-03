@@ -10,11 +10,11 @@
       no false-positive alerts that would block legitimate work
 - [ ] All existing CI workflows pass with governance checks enabled
 - [ ] Repository maintainers have acknowledged the graduation timeline
-- [ ] CODEOWNERS file includes at least one governance-aware reviewer
+- [ ] At least one maintainer (Maintain role) is available to review
 
 ## Policy Configuration
 
-- [ ] `governance.yaml` (or equivalent) exists at repo root with:
+- [ ] `agt-manifest.yaml` (or equivalent) exists at repo root with:
   - `mode: strict` (deny-by-default for tool calls)
   - `audit: required` (all governed actions logged)
   - Explicit allow rules for every permitted tool/action

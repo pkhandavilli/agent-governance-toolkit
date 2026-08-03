@@ -1,28 +1,29 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-"""
-Declarative policy language for Agent-OS governance.
+"""Surviving Agent-OS context and rate-limit primitives."""
 
-Separates policy rules (YAML/JSON data) from evaluation logic,
-enabling policies to be authored, versioned, and shared as plain files.
-"""
-
-from .async_evaluator import AsyncPolicyEvaluator, ConcurrencyStats
-from .backends import (
-    BackendDecision,
-    CedarBackend,
-    ExternalPolicyBackend,
-    OPABackend,
+from .context_accumulation import (
+    ContextDecision,
+    ContextOutcome,
+    accumulate,
+    decide_next,
 )
-from .bridge import document_to_governance, governance_to_document
-from .conflict_resolution import (
-    CandidateDecision,
-    ConflictResolutionStrategy,
-    PolicyConflictResolver,
-    PolicyScope,
-    ResolutionResult,
+from .context_aggregation import (
+    AggregationResult,
+    AggregationRule,
+    AggregationRuleSet,
+    evaluate_aggregation,
 )
-from .decision import PolicyCheckResult, ViolationCategory
+from .context_audit import ContextEvent, context_event
+from .context_delegation import merge_restrictions
+from .context_envelope import (
+    ContextEnvelope,
+    EnvelopeReference,
+    apply_restrictions,
+    envelope_reference,
+    fold,
+)
+from .data_classification import DataClassification
 from .dynamic_context import (
     CostContext,
     DynamicContext,
@@ -30,65 +31,35 @@ from .dynamic_context import (
     SystemContext,
     TimeContext,
 )
-from .evaluator import PolicyDecision, PolicyEvaluator
+from .obligations import Obligation, ObligationSet
 from .rate_limiting import RateLimitConfig, RateLimitExceeded, TokenBucket
-from .schema import (
-    PolicyAction,
-    PolicyCondition,
-    PolicyDefaults,
-    PolicyDocument,
-    PolicyOperator,
-    PolicyRule,
-    SandboxMounts,
-)
-from .shared import (
-    Condition,
-    SharedPolicyDecision,
-    SharedPolicyEvaluator,
-    SharedPolicyRule,
-    SharedPolicySchema,
-    policy_document_to_shared,
-    shared_to_policy_document,
-)
 
 __all__ = [
-    "AsyncPolicyEvaluator",
-    "BackendDecision",
-    "CandidateDecision",
-    "CedarBackend",
-    "ConcurrencyStats",
-    "Condition",
-    "ConflictResolutionStrategy",
-    "ExternalPolicyBackend",
-    "OPABackend",
+    "AggregationResult",
+    "AggregationRule",
+    "AggregationRuleSet",
+    "ContextDecision",
+    "ContextEnvelope",
+    "ContextEvent",
+    "ContextOutcome",
     "CostContext",
+    "DataClassification",
     "DynamicContext",
+    "EnvelopeReference",
+    "Obligation",
+    "ObligationSet",
     "QuotaContext",
-    "SystemContext",
-    "TimeContext",
-    "PolicyAction",
-    "PolicyCheckResult",
-    "PolicyCondition",
-    "PolicyConflictResolver",
-    "PolicyDecision",
-    "PolicyDefaults",
-    "PolicyDocument",
-    "PolicyEvaluator",
-    "PolicyOperator",
-    "PolicyRule",
-    "PolicyScope",
     "RateLimitConfig",
     "RateLimitExceeded",
-    "ResolutionResult",
-    "SandboxMounts",
+    "SystemContext",
+    "TimeContext",
     "TokenBucket",
-    "ViolationCategory",
-    "SharedPolicyDecision",
-    "SharedPolicyEvaluator",
-    "SharedPolicyRule",
-    "SharedPolicySchema",
-    "document_to_governance",
-    "governance_to_document",
-    "policy_document_to_shared",
-    "shared_to_policy_document",
+    "accumulate",
+    "apply_restrictions",
+    "context_event",
+    "decide_next",
+    "envelope_reference",
+    "evaluate_aggregation",
+    "fold",
+    "merge_restrictions",
 ]

@@ -33,6 +33,54 @@ class RuntimeClient(Protocol):
     async def evaluate_intervention_point(self, request: InterventionPointRequest) -> InterventionPointResult: ...
 
 
+def parse_manifest(manifest: str | bytes) -> JsonValue:
+    """Parse manifest text with the same serde_yaml implementation as the Rust runtime."""
+
+    try:
+        from agent_control_specification import _native
+    except ImportError as exc:
+        raise ImportError(
+            "The agent_control_specification._native extension is not built. "
+            "Install this package with maturin or build the wheel before parsing manifests."
+        ) from exc
+    manifest_str = manifest.decode("utf-8") if isinstance(manifest, bytes) else manifest
+    if not isinstance(manifest_str, str):
+        raise TypeError("manifest must be a string or bytes")
+    return _native.parse_manifest(manifest_str)
+
+
+def validate_manifest(manifest: str | bytes) -> None:
+    """Validate manifest text with the Rust runtime's typed manifest contract."""
+
+    try:
+        from agent_control_specification import _native
+    except ImportError as exc:
+        raise ImportError(
+            "The agent_control_specification._native extension is not built. "
+            "Install this package with maturin or build the wheel before validating manifests."
+        ) from exc
+    manifest_str = manifest.decode("utf-8") if isinstance(manifest, bytes) else manifest
+    if not isinstance(manifest_str, str):
+        raise TypeError("manifest must be a string or bytes")
+    _native.validate_manifest(manifest_str)
+
+
+def validate_manifest_overlay(manifest: str | bytes) -> None:
+    """Validate resolution-independent fields on a partial manifest."""
+
+    try:
+        from agent_control_specification import _native
+    except ImportError as exc:
+        raise ImportError(
+            "The agent_control_specification._native extension is not built. "
+            "Install this package with maturin or build the wheel before validating manifests."
+        ) from exc
+    manifest_str = manifest.decode("utf-8") if isinstance(manifest, bytes) else manifest
+    if not isinstance(manifest_str, str):
+        raise TypeError("manifest must be a string or bytes")
+    _native.validate_manifest_overlay(manifest_str)
+
+
 class NativeRuntimeClient:
     """Thin async facade over the deterministic Rust core PyO3 binding."""
 
@@ -50,6 +98,36 @@ class NativeRuntimeClient:
             policy_dispatcher,
             perf_telemetry,
             loader=lambda native, a, p: native.NativeRuntime.from_path(path, a, p, perf_telemetry),
+        )
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        sha256: str | None = None,
+        annotator_dispatcher: AnnotatorDispatcher | None = None,
+        policy_dispatcher: PolicyDispatcher | None = None,
+        perf_telemetry: int = 0,
+        *,
+        max_url_bytes: int | None = None,
+        url_timeout_ms: int | None = None,
+        max_url_redirects: int | None = None,
+    ) -> "NativeRuntimeClient":
+        return cls(
+            url,
+            annotator_dispatcher,
+            policy_dispatcher,
+            perf_telemetry,
+            loader=lambda native, a, p: native.NativeRuntime.from_url(
+                url,
+                sha256,
+                a,
+                p,
+                perf_telemetry,
+                max_url_bytes,
+                url_timeout_ms,
+                max_url_redirects,
+            ),
         )
 
     @classmethod
@@ -154,3 +232,25 @@ class NativeRuntimeClient:
             input_identity=input_identity,
             enforced_identity=enforced_identity,
         )
+
+    def policy_labels(self) -> dict[str, dict[str, object]]:
+        """Resolved ``policy_id`` and configured annotator names per intervention
+        point, from the native runtime's merged manifest.
+
+        The host telemetry layer reads this once at construction so events are
+        labelled on every constructor, including ``from_url`` and
+        ``from_manifest_chain`` where the SDK never holds the manifest text.
+        Returns an empty mapping when the native extension is unavailable (a
+        pure-Python test client), and never raises, since telemetry labels are
+        best effort. The shape is
+        ``{"<intervention_point>": {"policy_id": str | None, "annotators": [str]}}``.
+        """
+
+        native = self._native
+        if native is None or not hasattr(native, "policy_labels"):
+            return {}
+        try:
+            labels = native.policy_labels()
+        except Exception:  # noqa: BLE001 - label lookup must never break construction
+            return {}
+        return labels if isinstance(labels, dict) else {}

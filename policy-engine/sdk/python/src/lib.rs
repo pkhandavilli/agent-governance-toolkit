@@ -1,11 +1,14 @@
 use agent_control_specification_core::{
-    AnnotatorDispatcher, AnnotatorInvocation, Decision, EnforcementMode, InterventionPoint,
-    InterventionPointRequest, InterventionPointResult, JsonValue, Manifest, PerfTelemetry,
-    PolicyDispatcher, PreparedPolicyInvocation, Runtime, RuntimeError, Verdict,
+    parse_manifest_yaml_value, validate_acs_artifacts as validate_artifacts_core,
+    validate_acs_manifest as validate_manifest_artifact_core, validate_manifest_overlay_yaml,
+    validate_manifest_yaml, AnnotatorDispatcher, AnnotatorInvocation, Decision, EnforcementMode,
+    InterventionPoint, InterventionPointRequest, InterventionPointResult, JsonValue, Manifest,
+    PerfTelemetry, PolicyDispatcher, PreparedPolicyInvocation, Runtime, RuntimeError, Verdict,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -75,6 +78,47 @@ fn py_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
 
 fn runtime_error(error: RuntimeError) -> PyErr {
     PyRuntimeError::new_err(error.to_string())
+}
+
+// cspell:ignore pyfunction
+#[pyfunction]
+fn parse_manifest(py: Python<'_>, manifest: &str) -> PyResult<Py<PyAny>> {
+    let value = parse_manifest_yaml_value(manifest).map_err(runtime_error)?;
+    json_value_to_py(py, &value)
+}
+
+#[pyfunction]
+fn validate_manifest(manifest: &str) -> PyResult<()> {
+    validate_manifest_yaml(manifest).map_err(runtime_error)
+}
+
+#[pyfunction]
+fn validate_manifest_overlay(manifest: &str) -> PyResult<()> {
+    validate_manifest_overlay_yaml(manifest).map_err(runtime_error)
+}
+
+#[pyfunction]
+#[pyo3(signature = (manifest, rego_modules, opa_path = None))]
+fn validate_artifacts(
+    py: Python<'_>,
+    manifest: &str,
+    rego_modules: BTreeMap<String, String>,
+    opa_path: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let opa_path = opa_path.map(std::path::PathBuf::from);
+    let result =
+        py.detach(|| validate_artifacts_core(manifest, &rego_modules, opa_path.as_deref()));
+    let value =
+        serde_json::to_value(result).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    json_value_to_py(py, &value)
+}
+
+#[pyfunction]
+fn validate_manifest_artifact(py: Python<'_>, manifest: &str) -> PyResult<Py<PyAny>> {
+    let result = validate_manifest_artifact_core(manifest);
+    let value =
+        serde_json::to_value(result).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    json_value_to_py(py, &value)
 }
 
 fn annotation_error(error: PyErr) -> RuntimeError {
@@ -206,7 +250,13 @@ impl NativeRuntime {
         perf_telemetry: u8,
     ) -> PyResult<Self> {
         let manifest = Manifest::from_yaml_str(&manifest).map_err(runtime_error)?;
-        Self::from_manifest(manifest, annotator_cb, policy_cb, perf_telemetry)
+        Self::from_manifest(
+            manifest,
+            annotator_cb,
+            policy_cb,
+            perf_telemetry,
+            agent_control_specification_core::Limits::default(),
+        )
     }
 
     #[staticmethod]
@@ -218,7 +268,31 @@ impl NativeRuntime {
         perf_telemetry: u8,
     ) -> PyResult<Self> {
         let manifest = Manifest::from_path(Path::new(&path)).map_err(runtime_error)?;
-        Self::from_manifest(manifest, annotator_cb, policy_cb, perf_telemetry)
+        Self::from_manifest(
+            manifest,
+            annotator_cb,
+            policy_cb,
+            perf_telemetry,
+            agent_control_specification_core::Limits::default(),
+        )
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (url, sha256 = None, annotator_cb = None, policy_cb = None, perf_telemetry = 0, max_url_bytes = None, url_timeout_ms = None, max_url_redirects = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn from_url(
+        url: String,
+        sha256: Option<String>,
+        annotator_cb: Option<Py<PyAny>>,
+        policy_cb: Option<Py<PyAny>>,
+        perf_telemetry: u8,
+        max_url_bytes: Option<u64>,
+        url_timeout_ms: Option<u64>,
+        max_url_redirects: Option<u32>,
+    ) -> PyResult<Self> {
+        let manifest = Manifest::from_url(&url, sha256.as_deref()).map_err(runtime_error)?;
+        let limits = url_fetch_limits(max_url_bytes, url_timeout_ms, max_url_redirects);
+        Self::from_manifest(manifest, annotator_cb, policy_cb, perf_telemetry, limits)
     }
 
     #[staticmethod]
@@ -231,7 +305,13 @@ impl NativeRuntime {
     ) -> PyResult<Self> {
         let refs: Vec<&str> = manifests.iter().map(String::as_str).collect();
         let manifest = Manifest::from_yaml_chain(&refs).map_err(runtime_error)?;
-        Self::from_manifest(manifest, annotator_cb, policy_cb, perf_telemetry)
+        Self::from_manifest(
+            manifest,
+            annotator_cb,
+            policy_cb,
+            perf_telemetry,
+            agent_control_specification_core::Limits::default(),
+        )
     }
 
     fn evaluate(&self, py: Python<'_>, request: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -284,6 +364,14 @@ impl NativeRuntime {
 
         result_to_py(py, result)
     }
+
+    /// Resolved `policy_id` and configured annotator names per intervention
+    /// point, from the merged manifest. The host SDK telemetry layer reads this
+    /// once at construction so events are labelled on every constructor,
+    /// including `from_url` and `from_manifest_chain`.
+    fn policy_labels(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_value_to_py(py, &self.runtime.policy_labels())
+    }
 }
 
 impl NativeRuntime {
@@ -292,18 +380,25 @@ impl NativeRuntime {
         annotator_cb: Option<Py<PyAny>>,
         policy_cb: Option<Py<PyAny>>,
         perf_telemetry: u8,
+        limits: agent_control_specification_core::Limits,
     ) -> PyResult<Self> {
         let perf_telemetry = PerfTelemetry::from_u8(perf_telemetry)
             .ok_or_else(|| PyValueError::new_err("perf_telemetry must be 0, 1, or 2"))?;
         let annotations: Arc<dyn AnnotatorDispatcher> = match annotator_cb {
             Some(cb) => Arc::new(PyAnnotatorDispatcher { cb }),
-            None => agent_control_specification_core::dispatchers::default_annotator_dispatcher(),
+            None => {
+                agent_control_specification_core::dispatchers::default_annotator_dispatcher_for(
+                    &manifest, limits,
+                )
+            }
         };
         let policy: Arc<dyn PolicyDispatcher> = match policy_cb {
             Some(cb) => Arc::new(PyPolicyDispatcher { cb }),
             None => {
-                agent_control_specification_core::dispatchers::default_policy_dispatcher(&manifest)
-                    .map_err(runtime_error)?
+                agent_control_specification_core::dispatchers::default_policy_dispatcher_with_limits(
+                    &manifest, limits,
+                )
+                .map_err(runtime_error)?
             }
         };
         let runtime = Runtime::with_perf_telemetry(manifest, annotations, policy, perf_telemetry)
@@ -312,8 +407,35 @@ impl NativeRuntime {
     }
 }
 
+/// Build URL fetch limits from optional overrides, mirroring the FFI setter.
+/// `None` keeps the built in default for `max_bytes` and `timeout_ms`;
+/// `max_redirects` defaults to the built in value when `None` and is applied as
+/// given otherwise, so `Some(0)` forbids redirects.
+fn url_fetch_limits(
+    max_bytes: Option<u64>,
+    timeout_ms: Option<u64>,
+    max_redirects: Option<u32>,
+) -> agent_control_specification_core::Limits {
+    let mut limits = agent_control_specification_core::Limits::default();
+    if let Some(bytes) = max_bytes {
+        limits.max_manifest_url_bytes = bytes as usize;
+    }
+    if let Some(timeout) = timeout_ms {
+        limits.manifest_url_timeout_ms = timeout;
+    }
+    if let Some(redirects) = max_redirects {
+        limits.max_manifest_url_redirects = redirects as usize;
+    }
+    limits
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeRuntime>()?;
+    m.add_function(wrap_pyfunction!(parse_manifest, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_manifest, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_manifest_overlay, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_artifacts, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_manifest_artifact, m)?)?;
     Ok(())
 }

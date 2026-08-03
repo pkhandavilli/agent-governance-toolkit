@@ -61,6 +61,17 @@ class TestHealthEndpoints:
         body = resp.json()
         assert body["status"] in ("healthy", "degraded", "unhealthy")
 
+    def test_health_is_healthy_with_wired_audit_probe(self, client):
+        # The audit_backend check is overridden to probe the detector's real
+        # audit trail, so a fresh server reports HEALTHY (not a permanently
+        # DEGRADED / never-checked probe).
+        resp = client.get("/health")
+        body = resp.json()
+        assert body["status"] == "healthy"
+        audit = body["components"]["audit_backend"]
+        assert audit["status"] == "healthy"
+        assert "audit trail operational" in audit["message"]
+
     def test_health_has_timestamp(self, client):
         resp = client.get("/health")
         body = resp.json()
@@ -144,6 +155,39 @@ class TestInjectionDetection:
         )
         assert resp.status_code == 200
         assert resp.json()["is_injection"] is True
+
+    def test_detect_response_includes_evidence_field(self, client):
+        # The response schema always exposes `evidence` (empty when no backend
+        # is registered), so API consumers can rely on the key being present.
+        resp = client.post(
+            "/api/v1/detect/injection",
+            json={"text": "What is the weather today?"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["evidence"] == []
+
+    def test_detection_result_to_response_maps_evidence(self):
+        # Regression: the REST extractor previously dropped evidence signals,
+        # so backends would never surface through the API even when configured.
+        from agent_os.prompt_injection import (
+            DetectionResult,
+            EvidenceSignal,
+            ThreatLevel,
+        )
+        from agent_os.server.app import _detection_result_to_response
+
+        result = DetectionResult(
+            is_injection=False,
+            threat_level=ThreatLevel.NONE,
+            injection_type=None,
+            confidence=0.0,
+            evidence=[EvidenceSignal(backend="embedding_knn", score=0.42)],
+        )
+        response = _detection_result_to_response(result)
+        assert len(response.evidence) == 1
+        assert response.evidence[0].backend == "embedding_knn"
+        assert response.evidence[0].score == 0.42
+        assert response.evidence[0].blocks is False
 
 
 # =========================================================================

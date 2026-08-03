@@ -54,10 +54,12 @@ AGT is the host and policy enforcement point around the ACS decision core. The i
 | Layer | Role in the integration |
 | --- | --- |
 | AGT host adapters | Framework adapters in `agent-os` intercept the agent loop, build the snapshot for each intervention point, call the policy layer, and enforce the returned verdict. |
-| `agt-policies` bridge | The Python `agt.policies` package mediates between AGT host calls and the ACS runtime and normalizes verdicts for host consumption. |
+| `agt-policies` bridge | The Python `agent_control_specification` package mediates between AGT host calls and the ACS runtime and normalizes verdicts for host consumption. |
 | ACS native runtime | The `agent_control_specification` Python SDK over the Rust core performs the deterministic decision and is built from `sdk/python` with maturin. |
 
-AGT folder discovery, scope, and merge pre-resolve manifests before the engine evaluates them, so the runtime always receives one fully resolved manifest. Manifest resolution rules live in [`spec/agt/AGT-RESOLUTION-1.0.md`](spec/agt/AGT-RESOLUTION-1.0.md).
+The runtime consumes native ACS/AGT manifests and resolves ACS `extends`.
+Legacy governance folder discovery is available only through the one-way
+`agt migrate v4-to-v5` command.
 
 ## Core properties
 
@@ -126,6 +128,19 @@ These behaviors are part of the normative [`spec/SPECIFICATION.md`](spec/SPECIFI
 | `test` | Fixed test double path for runtime tests. |
 | `custom` | Host dispatcher path identified by a required `adapter` string. |
 
+## Artifact validation
+
+The Rust core exposes `validate_acs_artifacts` and every language SDK delegates
+to that implementation. The result shape is identical across Rust, Python,
+Node, and .NET, with `valid` plus structured diagnostics for manifest schema,
+typed ACS semantics, and OPA Rego parsing.
+
+```rust
+use agent_control_specification::validate_acs_artifacts;
+
+let result = validate_acs_artifacts(manifest_yaml, &rego_modules, None);
+```
+
 A policy binding selects one policy by `policy.id`. Rego policies require a query either on the policy definition or the binding.
 
 | Verdict member | Meaning |
@@ -171,6 +186,19 @@ The Rust core emits structured telemetry through `TelemetrySink`. Event kinds in
 | `Full` | `2` | External events plus per evaluation timing. |
 
 Telemetry defaults are content redacted. Events include stable fields such as `reason_code`, error class, action identity, policy id, annotator names, decisions, modes, durations, evidence artefacts, and evidence pointer key names. Events omit raw policy targets, tool arguments, model output, annotation payloads, transform values, evidence pointer URLs, secrets, and personal data.
+
+### Built-in sinks and OpenTelemetry export
+
+Every SDK ships pluggable telemetry sinks so a host can route the redaction-safe event without hand-rolling an audit layer. Each emits one `decision` event per evaluation and converges on the same OpenTelemetry contract, the per-decision counters `acs_intervention_{allow,deny,warn,escalate,transform}_total` and the histogram `acs_intervention_duration_ms` under the meter `agent_control_specification`. A sink that raises is caught and swallowed, so telemetry is never load-bearing.
+
+| SDK | How a sink is installed | OpenTelemetry sink |
+| --- | --- | --- |
+| Rust | `AgentControl::with_telemetry(Arc<dyn TelemetrySink>)`; built-in `InMemoryTelemetrySink`, `StdoutJsonTelemetrySink`, `MultiSink` | `OtelTelemetrySink` from the `agent_control_specification_otel` crate, added as a dependency |
+| Python | `telemetry_sink=` on `AgentControl` and every factory; `InMemoryTelemetrySink`, `JsonStdoutTelemetrySink`, `MultiSink` | `OtelMetricsTelemetrySink`, import-optional on `opentelemetry` |
+| Node | `telemetrySink` on `AgentControl` and every factory; `InMemoryTelemetrySink`, `JsonStdoutTelemetrySink`, `MultiSink` | `OtelMetricsTelemetrySink`, import-optional on `@opentelemetry/api` |
+| .NET | `telemetrySink` on `AgentControl` and every factory; `InMemoryTelemetrySink`, `JsonStdoutTelemetrySink`, `MultiSink` | `OtelMetricsTelemetrySink` over the BCL `System.Diagnostics.Metrics` meter that OpenTelemetry .NET collects |
+
+In Rust the core owns emission, so installing a sink is enough and the manifest-sourced policy id and annotator names are always present. The Python, Node, and .NET host-side layers build the event from the returned `InterventionPointResult` and read the policy id and annotator names from the fully merged manifest through a native `policy_labels` accessor at construction, so those labels are present for every constructor, including remote and manifest-chain sources.
 
 ## SDK matrix
 

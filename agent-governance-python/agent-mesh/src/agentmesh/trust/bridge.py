@@ -7,16 +7,17 @@ Direct passthrough bridge.
 Maintains the same API surface for compatibility.
 """
 
-from datetime import datetime, timezone
-from typing import Optional, Any
-from pydantic import BaseModel, Field
 import hashlib
 import hmac
 import logging
 import os
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from .handshake import TrustHandshake, HandshakeResult
-from .endorsement import EndorsementRegistry, Endorsement, EndorsementType
+from pydantic import BaseModel, Field
+
+from .endorsement import Endorsement, EndorsementRegistry, EndorsementType
+from .handshake import HandshakeResult, TrustHandshake
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,13 @@ class TrustBridge(BaseModel):
         identity = data.pop("identity", None)
         registry = data.pop("registry", None)
         endorsement_registry = data.pop("endorsement_registry", None)
+        attestation_verifier = data.pop("attestation_verifier", None)
+        attestation_reference_values = data.pop("attestation_reference_values", None)
+        tee_key_store = data.pop("tee_key_store", None)
+        tee_key_id = data.pop("tee_key_id", None)
+        attestation_evidence = data.pop("attestation_evidence", None)
+        require_attestation = data.pop("require_attestation", False)
+        require_tee_bound_key = data.pop("require_tee_bound_key", False)
         super().__init__(**data)
         self._identity = identity
         self._registry = registry
@@ -102,6 +110,13 @@ class TrustBridge(BaseModel):
             agent_did=self.agent_did,
             identity=identity,
             registry=registry,
+            attestation_verifier=attestation_verifier,
+            attestation_reference_values=attestation_reference_values,
+            tee_key_store=tee_key_store,
+            tee_key_id=tee_key_id,
+            attestation_evidence=attestation_evidence,
+            require_attestation=require_attestation,
+            require_tee_bound_key=require_tee_bound_key,
         )
         # P06: In-process integrity check on peer records.
         # NOTE: This is NOT a security primitive against an attacker
@@ -152,17 +167,31 @@ class TrustBridge(BaseModel):
         protocol: str = "iatp",
         required_trust_score: Optional[int] = None,
         required_capabilities: Optional[list[str]] = None,
+        require_attestation: Optional[bool] = None,
+        require_tee_bound_key: Optional[bool] = None,
     ) -> HandshakeResult:
         """
         Verify a peer before communication.
+
+        Args:
+            required_trust_score: Minimum registry trust score the peer must
+                meet. ``None`` uses ``default_trust_threshold``. An explicit
+                ``0`` means no trust floor (admit any verified peer); it is
+                honored as given and is NOT coerced to the default.
         """
-        threshold = required_trust_score or self.default_trust_threshold
+        threshold = (
+            self.default_trust_threshold
+            if required_trust_score is None
+            else required_trust_score
+        )
 
         result = await self._handshake.initiate(
             peer_did=peer_did,
             protocol=protocol,
             required_trust_score=threshold,
             required_capabilities=required_capabilities,
+            require_attestation=require_attestation,
+            require_tee_bound_key=require_tee_bound_key,
         )
 
         if result.verified:
@@ -185,7 +214,12 @@ class TrustBridge(BaseModel):
         peer_did: str,
         required_score: Optional[int] = None,
     ) -> bool:
-        """Check whether a previously verified peer meets the trust threshold."""
+        """Check whether a previously verified peer meets the trust threshold.
+
+        ``required_score=None`` uses ``default_trust_threshold``. An explicit
+        ``0`` means no trust floor (any verified peer passes) and is honored as
+        given, not coerced to the default.
+        """
         peer = self.peers.get(peer_did)
         if not peer or not peer.trust_verified:
             return False
@@ -197,7 +231,9 @@ class TrustBridge(BaseModel):
             self._peer_signatures.pop(peer_did, None)
             return False
 
-        threshold = required_score or self.default_trust_threshold
+        threshold = (
+            self.default_trust_threshold if required_score is None else required_score
+        )
         return peer.trust_score >= threshold
 
     def get_peer(self, peer_did: str) -> Optional[PeerInfo]:
@@ -205,8 +241,15 @@ class TrustBridge(BaseModel):
         return self.peers.get(peer_did)
 
     def get_trusted_peers(self, min_score: Optional[int] = None) -> list[PeerInfo]:
-        """Get all peers that are verified and meet the trust threshold."""
-        threshold = min_score or self.default_trust_threshold
+        """Get all peers that are verified and meet the trust threshold.
+
+        ``min_score=None`` uses ``default_trust_threshold``. An explicit ``0``
+        means no trust floor (return every verified peer) and is honored as
+        given, not coerced to the default.
+        """
+        threshold = (
+            self.default_trust_threshold if min_score is None else min_score
+        )
         return [
             peer for peer in self.peers.values()
             if peer.trust_verified and peer.trust_score >= threshold

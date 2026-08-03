@@ -1,4 +1,0 @@
-agent-os-kernel>=3.5.0
-cedarling_agentmesh>=3.5.0
-
-cedarling-python>=0.0.4
